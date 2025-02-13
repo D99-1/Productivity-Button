@@ -1,4 +1,27 @@
-# Productivity Button
+# Productivity Button v2
+This *was* just a button.
+
+This project began as nothing more than a button and a pico, all it could do was call the Toggl API and start/stop a session, but for me, that simply wasn't enough. It didn't feel premium enough to use, it didn't have enough of a purpose, it just wasn't cool enough.
+
+V2 was designed to bring this project back to the initial reason I wanted to create it, to make my pomodoro timer usage easier. V1 just didn't achieve what I needed it to, it was slow, felt very cheap and unfinished, and required a cable connection.
+
+This new version includes the addition of some new components:
+- DS1307 (4 Digit Display)
+- TM1637 (RTC)
+
+These components allow for the starting of a session to be instant and visible as the time counts down in real time, achiving the purpose of being the perfect, distraction-free, pomodoro starter.
+
+It does everything it should. It has 25min sessions followed by 5min breaks, it tracks time using Toggl, and it looks nice!
+
+This is not the end though. This is just the beginning of a productivity ecosystem. This is just one component in an array of custom made desk-devices to hopefully boost productivity, without relying on distraction-ridden and overdesigned UI's, while still looking very, very good.
+
+The next stage in the ecosystem lies [here](https://github.com/D99-1/Productivity-Matrix).
+
+*This is currently a ~~work~~soldering-in-process project.*
+
+![IMG Jan 31 2025](https://github.com/user-attachments/assets/3e9f40ab-4eea-4370-ade6-d9cf3444340a)
+
+# Productivity Button (OLD)
 This is a button.
 
 That pretty much explains the whole project but let me tell you a little more. This button was designed to be a simple way to start and stop the [Toggl](https://toggl.com) Time Tracker, but while making it, I thought why not give it a few more purposes like turning on desk lights and triggering Alexa routines.
