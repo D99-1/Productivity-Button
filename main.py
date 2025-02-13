@@ -1,160 +1,133 @@
-import urequests
-import machine
+from machine import Pin, SoftI2C, Timer
 import time
-import ubinascii
 import network
+import urequests
+import tm1637
+from ds1307 import DS1307
+import ubinascii
 
-# Configuration
-API_URL = "https://api.track.toggl.com/api/v9" 
-API_Token = ""
-WORKSPACE_ID = 0000  # Replace with Workspace ID as INT
-Wifi_SSID = ""
-Wifi_Password = ""
+TOGGL_API_KEY = ""
+TOGGL_WORKSPACE_ID = ""
+WORK_DURATION = 25 * 60 - 3
+BREAK_DURATION = 5 * 60
 
+display = tm1637.TM1637(clk=Pin(2), dio=Pin(3))
+display.show("IDLE")
+print("Display initialized")
 
-# GPIO Config
-BUTTON_PIN = 2
-LED_PIN = 11
-POLL_INTERVAL = 10 
-DEBOUNCE_DELAY = 15000 
+button = Pin(15, Pin.IN, Pin.PULL_UP)
 
+i2c0 = SoftI2C(scl=Pin(1), sda=Pin(0), freq=100000)
+rtc = DS1307(0x68, i2c0)
 
-button = machine.Pin(BUTTON_PIN, machine.Pin.IN, machine.Pin.PULL_UP)
-led = machine.Pin(LED_PIN, machine.Pin.OUT)
+TOGGL_API_KEY = TOGGL_API_KEY + ":api_token"
+TOGGL_API_KEY = TOGGL_API_KEY.encode("utf-8")
+TOGGL_API_KEY = ubinascii.b2a_base64(TOGGL_API_KEY).decode("utf-8").strip()
 
-API_Token = API_Token + ":api_token"
-API_Token = API_Token.encode("utf-8")
-API_Token = ubinascii.b2a_base64(API_Token)
-API_Token = API_Token.decode("utf-8")
-API_Token = API_Token.replace("\n", "")
+wifi = network.WLAN(network.STA_IF)
+wifi.active(True)
+wifi.connect("", "")
+while not wifi.isconnected():
+    time.sleep(1)
+print("Connected to Wi-Fi")
 
-header = {"Authorization": f"Basic {API_Token.strip()}"}
+def get_iso_timestamp():
+    datetime_tuple = rtc.datetime
+    iso_timestamp = f"{datetime_tuple[0]}-{datetime_tuple[1]:02d}-{datetime_tuple[2]:02d}T{datetime_tuple[3]:02d}:{datetime_tuple[4]:02d}:{datetime_tuple[5]:02d}Z"
+    return iso_timestamp
 
-def connect_wifi(ssid, password):
-    wlan = network.WLAN(network.STA_IF)
-    wlan.active(True)
-    if not wlan.isconnected():
-        print("Connecting to Wi-Fi...")
-        wlan.connect(ssid, password)
-        while not wlan.isconnected():
-            pass
-    print("Wi-Fi connected:", wlan.ifconfig())
+def start_toggl_session():
+    print("RTC Time:", rtc.datetime)
+    url = f"https://api.track.toggl.com/api/v9/workspaces/{TOGGL_WORKSPACE_ID}/time_entries"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Basic {TOGGL_API_KEY}"
+    }
+    data = {
+        "created_with": "Pomodoro Timer",
+        "description": "",
+        "tags": [],
+        "billable": False,
+        "workspace_id": int(TOGGL_WORKSPACE_ID),
+        "duration": -1,
+        "start": get_iso_timestamp(),
+        "stop": None
+    }
+    print("Starting Toggl session:", data)
+    response = urequests.post(url, json=data, headers=headers)
+    return response.json().get('id', None)
 
-connect_wifi(Wifi_SSID, Wifi_Password)
+def stop_toggl_session(entry_id):
+    if not entry_id:
+        return
+    url = f"https://api.track.toggl.com/api/v9/workspaces/{TOGGL_WORKSPACE_ID}/time_entries/{entry_id}/stop"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Basic {TOGGL_API_KEY}"
+    }
+    response = urequests.patch(url, headers=headers)
+    print("Stopping Toggl session:", response.json())
+    return response.json()
 
-def check_session():
-    try:
-        response = urequests.get(API_URL + "/me/time_entries/current", headers=header)
-        if response:
-            session_status = response.json()
-            if session_status is None:
-                print("Session is not running")
-                return [False, None, None]
-            else:
-                print("Session is running")
-                return [True, session_status['id'], session_status['workspace_id']]
+current_state = "IDLE"
+entry_id = None
+timer = Timer()
+remaining_time = 0
+
+def update_display(seconds):
+    minutes = seconds // 60
+    secs = seconds % 60
+    display.numbers(minutes, secs)
+
+def countdown_callback(t):
+    global remaining_time, current_state
+    if remaining_time <= 0:
+        timer.deinit()
+        if current_state == "WORK":
+            print("Work session ended, starting break")
+            start_break()
         else:
-            print("Failed to get session status")
-            return [False, None, None]
-    except Exception as e:
-        print("Error checking session:", e)
-        return [False, None, None]
-    finally:
-        if "response" in locals():
-            response.close()
+            print("Break session ended, starting work")
+            start_work()
+        return
 
-def stop_session(wid,sid):
-    try:
-        response = urequests.patch(API_URL + f"/workspaces/{wid}/time_entries/{sid}/stop", headers=header)
-        if response:
-            led.off()
-            print("Session stopped successfully")
-        else:
-            print("Failed to stop session")
-    except Exception as e:
-        print("Error stopping session:", e)
-    finally:
-        if "response" in locals():
-            response.close()
+    update_display(remaining_time)
+    remaining_time -= 1
 
-def start_session():
-    try:
-        timeRespose = urequests.get("https://timeapi.io/api/time/current/zone?timeZone=UTC")
-        if timeRespose.status_code == 200:
-            timeData = timeRespose.json()['dateTime'] + "Z"
-            timeRespose.close()
+def start_countdown(duration):
+    global remaining_time
+    remaining_time = duration
+    timer.init(period=1000, mode=Timer.PERIODIC, callback=countdown_callback)
 
-            data = {
-                "created_with": "",
-                "description": "",
-                "tags": [],
-                "billable": False,
-                "workspace_id": WORKSPACE_ID,
-                "duration": -1,
-                "start": timeData,
-                "stop": None
-            }
+def start_work():
+    global current_state, entry_id
+    current_state = "WORK"
+    entry_id = start_toggl_session()
+    print("Starting work session")
+    start_countdown(WORK_DURATION)
 
-            url = API_URL + f"/workspaces/{WORKSPACE_ID}/time_entries"
-            
-            response = urequests.post(url, headers=header, json=data)
-            
-            if response.status_code == 200:
-                session_data = response.json()
-                response.close()
-                led.on()
-                print("Session started successfully")
-                print("Session ID:", session_data.get('id'))
-            else:
-                print("Failed to start session. Status code:", response.status_code)
-                print("Response content:", response.text) 
-                response.close() 
-        else:
-            print("Failed to get time. Status code:", timeRespose.status_code)
-            timeRespose.close()
-    except Exception as e:
-        print("Error starting session:", e)
-    finally:
-        if "timeRespose" in locals():
-            timeRespose.close()
-        if "response" in locals():
-            response.close()
+def start_break():
+    global current_state, entry_id
+    current_state = "BREAK"
+    stop_toggl_session(entry_id)
+    display.show("REST")
+    print("Starting break session")
+    start_countdown(BREAK_DURATION)
 
+def stop_session():
+    global current_state, entry_id
+    timer.deinit()
+    stop_toggl_session(entry_id)
+    current_state = "IDLE"
+    display.show("IDLE")
+    print("Session stopped")
 
-
-last_button_press_time = 0
-
-
-def button_callback(pin):
-    global last_button_press_time
-    current_time = time.ticks_ms()
-
-    if time.ticks_diff(current_time, last_button_press_time) > DEBOUNCE_DELAY:
-        led.value(not led.value())
-        time.sleep(0.1)
-        led.value(not led.value())
-        time.sleep(0.1)
-        led.value(not led.value())
-        time.sleep(0.1)
-        led.value(not led.value())
-        print("Button pressed!")
-        session_running = check_session()
-        if session_running[0]:
-            stop_session(session_running[2],session_running[1])
-        elif not session_running[0]:
-            start_session()
-        last_button_press_time = current_time 
-
-
-button.irq(trigger=machine.Pin.IRQ_FALLING, handler=button_callback)
-
-
-def main():
-    while True:
-        session_running = check_session()
-        led.value(session_running[0])
-        time.sleep(POLL_INTERVAL)
-
-
-if __name__ == "__main__":
-    main()
+while True:
+    if button.value() == 0:
+        if current_state == "IDLE":
+            print("Button pressed: Starting work session")
+            start_work()
+        elif current_state in ["WORK", "BREAK"]:
+            print("Button pressed: Stopping session")
+            stop_session()
+    time.sleep(0.1)
